@@ -1,0 +1,36 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+.venv-win/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Tests / type checkers
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
