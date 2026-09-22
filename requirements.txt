@@ -10,3 +10,5 @@ python-multipart>=0.0.9
 pypdf>=5.0.0
 Pillow>=10.0.0
 pytesseract>=0.3.13
+google-genai>=0.1.1
+google-generativeai>=0.8.0

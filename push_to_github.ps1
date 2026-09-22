@@ -26,7 +26,7 @@ git add -A
 
 # 4. Commit changes
 Write-Host "[4/5] Committing changes..." -ForegroundColor Yellow
-git commit -m "feat: complete Cliniqo MediKiosk system - longitudinal profiles, dual portals, and adaptive clinical workflows"
+git commit -m "feat: complete Cliniqo MediKiosk system with full Render cloud deployment support (Docker, Tesseract OCR, durable SQLite vault)"
 
 # 5. Branch main & push
 Write-Host "[5/5] Setting main branch & pushing..." -ForegroundColor Yellow

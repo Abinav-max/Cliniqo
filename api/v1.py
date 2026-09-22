@@ -25,7 +25,7 @@ from api.auth import (
     hash_password,
     verify_password,
 )
-from api.database import db
+from api.database import db, DB_DIR
 from api.schemas import APISessionState
 from api.session_store import SessionStore
 from core.orchestrator import MedicalOrchestrator
@@ -918,6 +918,35 @@ class ClinicalRepository:
 
     def save_document_content(self, document_id: UUID, content: bytes) -> None:
         self.document_contents[document_id] = content
+        try:
+            doc_dir = DB_DIR / "documents"
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            (doc_dir / str(document_id)).write_bytes(content)
+        except Exception as exc:
+            logger.warning("Could not persist document to disk: %s", exc)
+
+    def get_document_content(self, document_id: UUID) -> bytes | None:
+        if document_id in self.document_contents:
+            return self.document_contents[document_id]
+        try:
+            doc_path = DB_DIR / "documents" / str(document_id)
+            if doc_path.exists():
+                data = doc_path.read_bytes()
+                self.document_contents[document_id] = data
+                return data
+        except Exception:
+            pass
+        doc_obj = self.documents.get(document_id)
+        if doc_obj and doc_obj.storage_path:
+            storage_client = getattr(get_runtime_session_store(), '_client', None)
+            if storage_client:
+                try:
+                    data = SupabaseStorageService(storage_client).download(doc_obj.storage_path)
+                    self.document_contents[document_id] = data
+                    return data
+                except Exception:
+                    pass
+        return None
 
     @staticmethod
     def _clinical_items(data: dict[str, Any], key: str) -> list[dict[str, Any] | str]:
@@ -1679,19 +1708,24 @@ def get_document(document_id: UUID):
     return document
 
 
+@router.get('/documents/{document_id}/content')
+def get_document_raw_content(document_id: UUID):
+    document = clinical_repository.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found')
+    content = clinical_repository.get_document_content(document_id)
+    if not content:
+        raise HTTPException(status_code=404, detail='Document content unavailable')
+    from fastapi.responses import Response
+    return Response(content=content, media_type=document.file_type or "application/octet-stream")
+
+
 @router.post('/documents/{document_id}/ocr', response_model=DocumentResponse)
 def process_document_ocr(document_id: UUID):
     document = clinical_repository.get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail='Document not found')
-    content = clinical_repository.document_contents.get(document_id)
-    if content is None and document.storage_path:
-        storage_client = getattr(get_runtime_session_store(), '_client', None)
-        if storage_client:
-            try:
-                content = SupabaseStorageService(storage_client).download(document.storage_path)
-            except StorageServiceError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
+    content = clinical_repository.get_document_content(document_id)
     if content is None:
         raise HTTPException(status_code=404, detail='Document content unavailable')
     try:

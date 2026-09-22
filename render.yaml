@@ -1,0 +1,36 @@
+# Render Blueprint Specification for Cliniqo MediKiosk
+# Documentation: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: cliniqo-medikiosk
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ENVIRONMENT
+        value: production
+      - key: DATA_DIR
+        value: /app/data
+      # Primary LLM API Key for clinical interview & diagnosis synthesis
+      - key: GROQ_API_KEY
+        sync: false
+      # Optional: Google Gemini API Key for handwritten prescription multimodal OCR
+      - key: GEMINI_API_KEY
+        sync: false
+      # Optional: Cloud Supabase persistence credentials
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_REQUIRED
+        value: "false"
+      - key: LLM_PRIMARY_PROVIDER
+        value: groq
+      - key: LLM_FALLBACK_ENABLED
+        value: "true"

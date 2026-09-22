@@ -15,8 +15,19 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-DB_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DB_DIR / "cliniqo_vault.db"
+import os
+
+_custom_db_path = os.environ.get("DATABASE_PATH")
+if _custom_db_path:
+    DB_PATH = Path(_custom_db_path)
+    DB_DIR = DB_PATH.parent
+else:
+    _custom_data_dir = os.environ.get("DATA_DIR")
+    if _custom_data_dir:
+        DB_DIR = Path(_custom_data_dir)
+    else:
+        DB_DIR = Path(__file__).resolve().parent.parent / "data"
+    DB_PATH = DB_DIR / "cliniqo_vault.db"
 
 
 class DatabaseManager:
