@@ -30,6 +30,7 @@
     'clinicalsummaries-summary-confirmation',
     'clinical-case-summary',
     'doctor-workstation',
+    'patient-visits',
     'hospital-priority-alert',
     'healthstory-your-health-story',
     'healthstory-your-health-timeline',
@@ -5629,9 +5630,9 @@ All records verified and authorized by patient for clinical review.
           medsListEl.innerHTML = meds.map(m => {
             const name = typeof m === 'string' ? m : (m.name || m.drug_name || 'Medication');
             const dose = typeof m === 'object' && m.dosage ? m.dosage : '';
-            const isConfirmed = typeof m === 'object' ? (m.confirmed === true || m.status === 'active' || m.temporal_status === 'current') : true;
+            const isConfirmed = typeof m === 'object' ? (m.confirmed === true || m.status === 'active' || m.status === 'patient_confirmed' || m.temporal_status === 'current') : true;
             return `
-              <div class="p-2.5 rounded-xl bg-surface-container border border-secondary-container/60 flex items-center justify-between">
+              <div class="p-2.5 rounded-xl bg-surface-container border border-secondary-container/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div class="flex items-center gap-2">
                   <span class="material-symbols-outlined text-[18px] ${isConfirmed ? 'text-primary' : 'text-amber-600'}">medication</span>
                   <div>
@@ -5639,12 +5640,37 @@ All records verified and authorized by patient for clinical review.
                     ${dose ? `<span class="text-secondary ml-1 font-mono text-[11px]">${dose}</span>` : ''}
                   </div>
                 </div>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isConfirmed ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
-                  ${isConfirmed ? 'Patient Confirmed Active' : 'Historical / Needs Verification'}
-                </span>
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isConfirmed ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
+                    ${isConfirmed ? 'Patient Confirmed Active' : 'Historical / Needs Verification'}
+                  </span>
+                  ${!isConfirmed ? `
+                    <button type="button" class="confirm-med-btn px-2.5 py-1 rounded-lg bg-primary hover:bg-primary-dark text-white text-[10px] font-bold cursor-pointer transition-all" data-med="${name}">
+                      Still Taking (Confirm)
+                    </button>
+                  ` : ''}
+                </div>
               </div>
             `;
           }).join('');
+
+          medsListEl.querySelectorAll('.confirm-med-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const medName = btn.getAttribute('data-med');
+              try {
+                await apiRequest(`/api/v1/patients/${patientId}/profile/baseline`, {
+                  method: 'POST',
+                  body: {
+                    active_medications: [{ name: medName, status: 'patient_confirmed', confirmed: true, temporal_status: 'current' }]
+                  }
+                });
+                saveToVaultNotification("Medication Confirmed", `Confirmed: Still actively taking ${medName}.`);
+                renderLongitudinalProfile(patientId);
+              } catch (e) {
+                alert("Could not update medication status: " + e.message);
+              }
+            });
+          });
         }
       }
 
@@ -6039,6 +6065,9 @@ All records verified and authorized by patient for clinical review.
     }
 
     const triage = triageSelect?.value || 'routine';
+    const followUpDaysVal = document.getElementById('doctorFollowUpDaysSelect')?.value;
+    const followUpReasonVal = (document.getElementById('doctorFollowUpReasonInput')?.value || '').trim();
+    const followUpDays = followUpDaysVal ? parseInt(followUpDaysVal, 10) : null;
 
     if (submitBtn) {
       submitBtn.innerHTML = `<span>Signing Off...</span><span class="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>`;
@@ -6051,19 +6080,22 @@ All records verified and authorized by patient for clinical review.
         body: {
           doctor_notes: notes,
           triage_level: triage,
-          verified_by: 'Dr. R. Sengupta, MD'
+          verified_by: 'Dr. Arvind Kumar, MD',
+          follow_up_days: followUpDays,
+          follow_up_reason: followUpReasonVal
         }
       });
 
-      if (resp && resp.status === 'verified') {
+      if (resp && (resp.status === 'verified' || resp.verified)) {
         currentDoctorCase.doctor_verified = true;
         currentDoctorCase.doctor_notes = notes;
         currentDoctorCase.triage_level = triage;
         currentDoctorCase.doctor_verified_at = new Date().toISOString();
 
+        const verifDoctorName = (currentUser && currentUser.display_name) ? currentUser.display_name : 'Dr. Arvind Kumar, MD';
         const verifStatus = document.getElementById('caseReviewVerificationStatus');
         if (verifStatus) {
-          verifStatus.textContent = '✓ Verified & Signed by Dr. R. Sengupta, MD';
+          verifStatus.textContent = `✓ Verified & Signed by ${verifDoctorName}`;
           verifStatus.className = 'px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-xs';
         }
 
@@ -6073,7 +6105,7 @@ All records verified and authorized by patient for clinical review.
           resultMsg.classList.remove('hidden');
         }
 
-        saveToVaultNotification("EMR Signed Off", `Dr. R. Sengupta verified Case #${currentDoctorCase.token_number || ''}`);
+        saveToVaultNotification("EMR Signed Off", `${verifDoctorName} verified Case #${currentDoctorCase.token_number || ''}`);
         
         // Broadcast case verified event across tabs
         if (hospitalSyncChannel) {
@@ -6274,13 +6306,29 @@ All records verified and authorized by patient for clinical review.
           const abhaBadge = document.getElementById('foundPatientAbhaBadge');
           if (abhaBadge) abhaBadge.textContent = found.abha_id ? `ABHA #${found.abha_id}` : 'Hospital UHID Verified';
 
-          // Fetch full profile in background to get previous visit count
+          // Fetch full profile in background to get previous visit count & pending follow-ups
           try {
             const fullProf = await apiRequest(`/api/v1/patients/${found.patient_id}/full-profile`);
             if (fullProf) {
               const vCount = (fullProf.visits || []).length;
               const vEl = document.getElementById('foundProfileVisits');
               if (vEl) vEl.textContent = `${vCount} Previous Visit${vCount === 1 ? '' : 's'}`;
+
+              const followUps = fullProf.follow_ups || [];
+              const pendingFu = followUps.find(f => f.status === 'scheduled' || f.status === 'pending');
+              const fuBanner = document.getElementById('foundPatientFollowUpBanner');
+              const fuText = document.getElementById('foundPatientFollowUpText');
+              const fuBtn = document.getElementById('startFoundFollowUpBtn');
+              if (pendingFu && fuBanner && fuText && fuBtn) {
+                const targetD = pendingFu.follow_up_date || pendingFu.target_date || 'Upcoming';
+                fuText.textContent = `Scheduled follow-up on record: "${pendingFu.reason || 'Consultation'}" (Target: ${targetD}). Returning for this consultation?`;
+                fuBanner.classList.remove('hidden');
+                fuBtn.onclick = async () => {
+                  await startFollowUpReturnVisit(found.patient_id, pendingFu.follow_up_id || pendingFu.id, pendingFu.related_visit_id || pendingFu.parent_visit_id, pendingFu.reason);
+                };
+              } else if (fuBanner) {
+                fuBanner.classList.add('hidden');
+              }
             }
           } catch (e) {}
 

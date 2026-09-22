@@ -108,6 +108,13 @@ class MedicalOrchestrator:
         self._document = document_agent
         self._summary = summary_agent
         self.state = OrchestrationState(session_id=session_id)
+        self.patient_context: dict[str, Any] = {}
+
+    def set_patient_context(self, context: dict[str, Any]) -> None:
+        """Set longitudinal patient profile context for adaptive interview turns."""
+        self.patient_context = context or {}
+        if hasattr(self._interview, "set_patient_context"):
+            self._interview.set_patient_context(context)
 
     def handle_patient_message(
         self,

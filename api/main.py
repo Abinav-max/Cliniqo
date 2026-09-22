@@ -295,6 +295,56 @@ async def send_patient_message(session_id: str, request: PatientMessageRequest):
     
     orchestrator = MedicalOrchestrator(session_id=session_id)
     orchestrator.state = OrchestrationState.model_validate(session.orchestrator_state)
+
+    # Load longitudinal patient context (demographics, chronic history, allergies, meds)
+    pat_id_str = str(request.patient_id) if request.patient_id else None
+    if not pat_id_str:
+        sess_record = db.get_session(session_id)
+        if sess_record and sess_record.get("patient_id"):
+            pat_id_str = str(sess_record["patient_id"])
+    
+    patient_record = db.get_patient(pat_id_str) if pat_id_str else None
+    patient_chronic: list[str] = []
+    patient_allergies: list[str] = []
+    patient_meds: list[str] = []
+
+    if patient_record:
+        import json as _json
+        p_name = patient_record.get("display_name") or "Patient"
+        p_gen = patient_record.get("gender") or "Unknown"
+        p_dob = patient_record.get("date_of_birth") or ""
+        demog_str = f"{p_name}, {p_gen}" + (f", DOB: {p_dob}" if p_dob else "")
+        if patient_record.get("chronic_conditions_json"):
+            try:
+                raw_c = _json.loads(patient_record["chronic_conditions_json"]) if isinstance(patient_record["chronic_conditions_json"], str) else patient_record["chronic_conditions_json"]
+                for c in (raw_c or []):
+                    c_name = c if isinstance(c, str) else (c.get("condition") or c.get("name"))
+                    if c_name and c_name not in patient_chronic: patient_chronic.append(c_name)
+            except Exception:
+                pass
+        if patient_record.get("allergies_json"):
+            try:
+                raw_a = _json.loads(patient_record["allergies_json"]) if isinstance(patient_record["allergies_json"], str) else patient_record["allergies_json"]
+                for a in (raw_a or []):
+                    a_name = a if isinstance(a, str) else (a.get("allergen") or a.get("name"))
+                    if a_name and a_name not in patient_allergies: patient_allergies.append(a_name)
+            except Exception:
+                pass
+        if patient_record.get("active_medications_json"):
+            try:
+                raw_m = _json.loads(patient_record["active_medications_json"]) if isinstance(patient_record["active_medications_json"], str) else patient_record["active_medications_json"]
+                for m in (raw_m or []):
+                    m_name = m if isinstance(m, str) else (m.get("name") or m.get("name_as_reported"))
+                    if m_name and m_name not in patient_meds: patient_meds.append(m_name)
+            except Exception:
+                pass
+
+        orchestrator.set_patient_context({
+            "demographics": demog_str,
+            "chronic_conditions": patient_chronic,
+            "allergies": patient_allergies,
+            "medications": patient_meds,
+        })
     
     # 1. Run real-time multilingual NLP entity extraction
     from services.nlp_service import PatientNLPService
@@ -313,6 +363,14 @@ async def send_patient_message(session_id: str, request: PatientMessageRequest):
     ch = state.clinical_history
     if not ch.history_of_present_illness or not isinstance(ch.history_of_present_illness, HistoryOfPresentIllness):
         ch.history_of_present_illness = HistoryOfPresentIllness()
+
+    # Prepopulate baseline chronic conditions and allergies from longitudinal profile
+    for c in patient_chronic:
+        if c not in ch.past_medical_history:
+            ch.past_medical_history.append(c)
+    for a in patient_allergies:
+        if a not in ch.allergies:
+            ch.allergies.append(a)
 
     # Extract symptoms & chief complaint
     extracted_symptoms = entities.get("symptoms", [])
@@ -388,6 +446,24 @@ async def send_patient_message(session_id: str, request: PatientMessageRequest):
                 rf_str = str(rf)
                 if not any(f.description == rf_str for f in state.risk_assessment.risk_flags):
                     state.risk_assessment.risk_flags.append(RiskFlag(category="cardiorespiratory", severity=RiskSeverity.HIGH, description=rf_str, evidence=request.message, requires_clinician_review=True))
+
+    # Adaptive clinical rule: Chest pain or cardiorespiratory distress in patient with Hypertension / Diabetes history
+    lower_msg = request.message.lower()
+    is_cardiac_symptom = any(kw in lower_msg for kw in ["chest pain", "chest tightness", "chest pressure", "radiating to arm", "radiating to jaw", "angina", "palpitations", "shortness of breath", "difficulty breathing"])
+    has_cardio_risk = any(cond.lower() in ("hypertension", "high blood pressure", "htn", "diabetes", "type 2 diabetes", "t2dm", "coronary", "cardiac", "cholesterol", "heart disease") for cond in ch.past_medical_history)
+    if is_cardiac_symptom and has_cardio_risk:
+        from core.schemas import RiskSeverity
+        cardiac_desc = "Acute cardiorespiratory symptom reported in patient with documented cardiovascular risk factors (Hypertension/Diabetes)."
+        if not state.risk_assessment:
+            state.risk_assessment = RiskAssessment(
+                session_id=session_id,
+                overall_attention_level=AttentionLevel.URGENT,
+                risk_flags=[RiskFlag(category="cardiorespiratory", severity=RiskSeverity.HIGH, description=cardiac_desc, evidence=request.message, requires_clinician_review=True)]
+            )
+        else:
+            state.risk_assessment.overall_attention_level = AttentionLevel.URGENT
+            if not any("cardiorespiratory" in f.category for f in state.risk_assessment.risk_flags):
+                state.risk_assessment.risk_flags.append(RiskFlag(category="cardiorespiratory", severity=RiskSeverity.HIGH, description=cardiac_desc, evidence=request.message, requires_clinician_review=True))
 
     # Generate updated physician summary for this turn
     try:

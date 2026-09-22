@@ -2595,12 +2595,35 @@ def doctor_verify_case(session_id: UUID, req: DoctorVerifyRequest):
 
     db.update_session_hospital_fields(str(session_id), fields)
 
+    created_follow_up = None
+    if (req.follow_up_days or req.follow_up_reason) and existing.get("patient_id"):
+        from datetime import timedelta
+        days = req.follow_up_days if req.follow_up_days and req.follow_up_days > 0 else 14
+        target_dt = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
+        f_id = str(uuid4())
+        created_follow_up = {
+            "follow_up_id": f_id,
+            "patient_id": str(existing["patient_id"]),
+            "related_visit_id": str(session_id),
+            "follow_up_date": target_dt,
+            "reason": req.follow_up_reason or "Clinical progress evaluation",
+            "department": existing.get("department", "general"),
+            "doctor_or_unit": req.doctor_id,
+            "status": "scheduled",
+            "notes": req.doctor_notes[:200] if req.doctor_notes else None
+        }
+        try:
+            db.save_follow_up(created_follow_up)
+        except Exception as f_err:
+            logger.warning("Could not save follow-up from doctor verification: %s", f_err)
+
     return {
         "session_id": str(session_id),
         "doctor_id": req.doctor_id,
         "verified": True,
         "verified_at": now_str,
-        "message": "Case verified by clinician. Doctor notes recorded. AI summary pending final medical record sign-off.",
+        "follow_up": created_follow_up,
+        "message": "Case verified by clinician. Doctor notes recorded. EMR finalized.",
     }
 
 

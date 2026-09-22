@@ -332,6 +332,11 @@ class InterviewAgent:
             f"{SAFETY_SYSTEM_INSTRUCTION}\n\n{INTERVIEW_SYSTEM_INSTRUCTION}"
         )
         self.state = InterviewState(session_id=session_id or str(uuid4()))
+        self.patient_context: dict[str, Any] = {}
+
+    def set_patient_context(self, context: dict[str, Any]) -> None:
+        """Set longitudinal patient profile context for adaptive anamnesis."""
+        self.patient_context = context or {}
 
     def handle_message(self, patient_message: str) -> InterviewTurnResult:
         text = (patient_message or "").strip()
@@ -406,7 +411,26 @@ class InterviewAgent:
             f"{turn.role}: {turn.content}"
             for turn in self.state.conversation_history
         ]
+        context_block = ""
+        if getattr(self, "patient_context", None):
+            demog = self.patient_context.get("demographics") or "Not specified"
+            conds = self.patient_context.get("chronic_conditions") or []
+            algs = self.patient_context.get("allergies") or []
+            meds = self.patient_context.get("medications") or []
+            context_block = (
+                "Patient Medical Profile & Longitudinal Baseline:\n"
+                f"- Demographics: {demog}\n"
+                f"- Documented Chronic Conditions: {', '.join(conds) if conds else 'None'}\n"
+                f"- Known Allergies: {', '.join(algs) if algs else 'None'}\n"
+                f"- Active Medications: {', '.join(meds) if meds else 'None'}\n\n"
+                "Adaptive Anamnesis Rules:\n"
+                "1. If patient reports chest pain, pressure, breathlessness, or palpitations and has a history of hypertension, diabetes, or cardiovascular disease: adapt immediately by asking targeted cardiac questions (radiation to arm/jaw, diaphoresis, crushing vs sharp, exertional onset) and note urgency.\n"
+                "2. If symptoms relate to known chronic conditions, ask if this is an acute flare-up or recent change.\n"
+                "3. Never ask the patient to re-enter established baseline demographics/allergies; focus questions on new symptoms, timeline, and acuity.\n\n"
+            )
+
         return (
+            f"{context_block}"
             "Current collected information (do not invent new patient facts):\n"
             f"{self.state.patient_information.model_dump_json(indent=2)}\n\n"
             "Conversation history:\n"
