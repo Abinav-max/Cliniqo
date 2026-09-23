@@ -32,5 +32,9 @@ services:
         value: "false"
       - key: LLM_PRIMARY_PROVIDER
         value: groq
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
       - key: LLM_FALLBACK_ENABLED
         value: "true"
